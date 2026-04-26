@@ -1,0 +1,25 @@
+{
+  "name": "insighta",
+  "version": "1.0.0",
+  "description": "Insighta Labs+ CLI",
+  "main": "src/index.js",
+  "bin": {
+    "insighta": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "cli-table3": "^0.6.3",
+    "commander": "^12.0.0",
+    "ora": "^5.4.1"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
