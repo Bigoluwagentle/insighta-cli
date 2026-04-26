@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 const { program } = require("commander");
 const http        = require("http");
 const crypto      = require("crypto");
@@ -67,13 +65,19 @@ program.command("login").description("Log in via GitHub OAuth").action(() => {
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
-    if (url.pathname !== "/callback" || url.searchParams.get("state") !== state) { res.end("Invalid."); return; }
+    if (url.pathname !== "/callback") { res.end("Invalid path."); return; }
 
     const accessToken  = url.searchParams.get("access_token");
     const refreshToken = url.searchParams.get("refresh_token");
     const username     = url.searchParams.get("username");
+    const error        = url.searchParams.get("error");
 
-    if (!accessToken) { res.end("<h2>Login failed. Close this tab.</h2>"); server.close(); return; }
+    if (error || !accessToken) {
+      res.end("<h2>Login failed. Close this tab and try again.</h2>");
+      server.close();
+      console.error(chalk.red("Login failed."));
+      return;
+    }
 
     saveCredentials({ access_token: accessToken, refresh_token: refreshToken, username });
     res.end("<h2>Login successful! You can close this tab.</h2>");
@@ -82,7 +86,12 @@ program.command("login").description("Log in via GitHub OAuth").action(() => {
   });
 
   server.listen(port, () => {
-    const params = new URLSearchParams({ state, code_challenge: challenge, code_challenge_method: "S256", redirect_uri: redirectUri });
+    const params = new URLSearchParams({
+      state,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      redirect_uri: redirectUri,
+    });
     const url = `${BASE_URL}/auth/github?${params}`;
     console.log(chalk.blue("Opening GitHub login in your browser..."));
     console.log(chalk.gray(`If it doesn't open, visit: ${url}`));
