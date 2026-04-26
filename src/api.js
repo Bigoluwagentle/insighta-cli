@@ -1,7 +1,7 @@
 const https = require("https");
 const http  = require("http");
 
-const BASE_URL = process.env.INSIGHTA_API_URL || "https://apiprofilecardscalling-production.up.railway.app";
+const BASE_URL = process.env.INSIGHTA_API_URL || "https://insighta-backend-production.up.railway.app";
 
 function request(method, path, body, token) {
   return new Promise((resolve, reject) => {
