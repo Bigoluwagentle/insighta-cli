@@ -79,3 +79,5 @@ Set `INSIGHTA_API_URL` to point to a different backend:
 ```bash
 export INSIGHTA_API_URL=https://your-backend.railway.app
 ```
+
+<!-- Stage 3 complete -->
