@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 const { program } = require("commander");
 const http        = require("http");
 const crypto      = require("crypto");

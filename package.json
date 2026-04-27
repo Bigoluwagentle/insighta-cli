@@ -1,7 +1,7 @@
 {
   "name": "insighta",
   "version": "1.0.0",
-  "description": "Insighta Labs+ CLI",
+  "description": "Insighta Labs+ CLI — demographic intelligence at your fingertips",
   "main": "src/index.js",
   "bin": {
     "insighta": "src/index.js"
