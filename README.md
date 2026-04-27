@@ -6,17 +6,16 @@ Command-line interface for Insighta Labs+.
 
 ## Installation
 
-Install directly from GitHub:
-```bash
+### Option 1 — Install from GitHub
 npm install -g github:bigoluwagentle/insighta-cli
-```
 
-Or clone and link locally:
-```bash
+### Option 2 — Clone and link
 git clone https://github.com/bigoluwagentle/insighta-cli.git
 cd insighta-cli
 npm install
 npm link
+
+Then run from anywhere:
 insighta login
 ```
 
