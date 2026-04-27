@@ -6,14 +6,25 @@ Command-line interface for Insighta Labs+.
 
 ## Installation
 
+Install directly from GitHub:
 ```bash
-npm install -g insighta
+npm install -g github:bigoluwagentle/insighta-cli
 ```
 
-Or locally:
+Or clone and link locally:
 ```bash
+git clone https://github.com/bigoluwagentle/insighta-cli.git
+cd insighta-cli
 npm install
 npm link
+insighta login
+```
+
+## Configuration
+
+The CLI talks to the live backend by default. To use a different backend:
+```bash
+export INSIGHTA_API_URL=https://your-backend.railway.app
 ```
 
 ---
