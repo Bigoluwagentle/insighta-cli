@@ -2,6 +2,7 @@
 
 const { program } = require("commander");
 const http        = require("http");
+const https       = require("https");
 const crypto      = require("crypto");
 const { exec }    = require("child_process");
 const ora         = require("ora");
@@ -16,9 +17,9 @@ const { loadCredentials, saveCredentials, clearCredentials } = require("./creden
 program.name("insighta").description("Insighta Labs+ CLI").version("1.0.0");
 
 function openBrowser(url) {
-  const cmd = process.platform === "win32" ? `start "" "${url}"` :
-              process.platform === "darwin" ? `open "${url}"` :
-              `xdg-open "${url}"`;
+  const cmd = process.platform === "win32" ? "start \"\" \"" + url + "\"" :
+              process.platform === "darwin" ? "open \"" + url + "\"" :
+              "xdg-open \"" + url + "\"";
   exec(cmd);
 }
 
@@ -28,22 +29,34 @@ function generatePKCE() {
   return { verifier, challenge };
 }
 
+function postJson(url, body) {
+  return new Promise((resolve, reject) => {
+    const parsed  = new URL(url);
+    const isHttps = parsed.protocol === "https:";
+    const lib     = isHttps ? https : http;
+    const bodyStr = JSON.stringify(body);
+    const options = {
+      hostname: parsed.hostname,
+      port:     parsed.port || (isHttps ? 443 : 80),
+      path:     parsed.pathname + parsed.search,
+      method:   "POST",
+      headers:  { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(bodyStr) },
+    };
+    const req = lib.request(options, (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => { try { resolve({ status: res.statusCode, data: JSON.parse(data) }); } catch { resolve({ status: res.statusCode, data }); } });
+    });
+    req.on("error", reject);
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
 async function getToken() {
   const creds = loadCredentials();
-  if (!creds) {
-    console.error(chalk.red("Not logged in. Run: insighta login"));
-    process.exit(1);
-  }
-
-  // Try current access token
-  try {
-    await makeClient(creds.access_token).get("/auth/me");
-    return creds.access_token;
-  } catch (err) {
-    if (err.status !== 401) throw err;
-  }
-
-  // Auto-refresh
+  if (!creds) { console.error(chalk.red("Not logged in. Run: insighta login")); process.exit(1); }
+  try { await makeClient(creds.access_token).get("/auth/me"); return creds.access_token; } catch (err) { if (err.status !== 401) throw err; }
   const spinner = ora("Refreshing session...").start();
   try {
     const res = await makeClient(null).post("/auth/refresh", { refresh_token: creds.refresh_token });
@@ -69,68 +82,83 @@ function printProfile(p) {
   console.log(table.toString());
 }
 
-// ─── LOGIN ────────────────────────────────────────────────────────────────────
 program.command("login").description("Log in via GitHub OAuth").action(() => {
   const { verifier, challenge } = generatePKCE();
   const port        = 9876;
-  const redirectUri = `http://localhost:${port}/callback`;
+  const localCallback = "http://localhost:" + port + "/callback";
 
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, `http://localhost:${port}`);
+  let capturedState = null;
+
+  const server = http.createServer(async (req, res) => {
+    const url   = new URL(req.url, "http://localhost:" + port);
     if (url.pathname !== "/callback") { res.end("Invalid path."); return; }
 
-    const accessToken  = url.searchParams.get("access_token");
-    const refreshToken = url.searchParams.get("refresh_token");
-    const username     = url.searchParams.get("username");
-    const error        = url.searchParams.get("error");
+    const code  = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const error = url.searchParams.get("error");
 
-    if (error || !accessToken) {
+    if (error || !code || !state) {
       res.end("<h2>Login failed. Close this tab and try again.</h2>");
       server.close();
-      console.error(chalk.red(`\nLogin failed: ${error || "no token received"}`));
+      console.error(chalk.red("\nLogin failed: " + (error || "no code received")));
       return;
     }
 
-    saveCredentials({ access_token: accessToken, refresh_token: refreshToken, username });
-    res.end("<h2>Login successful! You can close this tab.</h2>");
+    res.end("<h2>Completing login... You can close this tab.</h2>");
     server.close();
-    console.log(chalk.green(`\nLogged in as @${username}`));
+
+    const spinner = ora("Completing login...").start();
+    try {
+      const result = await postJson(BASE_URL + "/auth/github/token", {
+        code,
+        code_verifier: verifier,
+        state,
+      });
+
+      if (result.status !== 200 || !result.data.access_token) {
+        spinner.fail("Login failed: " + (result.data.message || "unknown error"));
+        return;
+      }
+
+      saveCredentials({
+        access_token:  result.data.access_token,
+        refresh_token: result.data.refresh_token,
+        username:      result.data.username,
+      });
+      spinner.succeed(chalk.green("Logged in as @" + result.data.username));
+    } catch (err) {
+      spinner.fail("Login failed: " + err.message);
+    }
   });
 
   server.listen(port, () => {
-    // Pass code_challenge + redirect_uri to backend
-    // Backend stores them, redirects to GitHub
-    // After GitHub auth, backend validates and redirects back to our local server
+    
     const params = new URLSearchParams({
       code_challenge:        challenge,
       code_challenge_method: "S256",
-      redirect_uri:          redirectUri,
+      redirect_uri:          localCallback,
     });
-    const url = `${BASE_URL}/auth/github?${params}`;
+    const url = BASE_URL + "/auth/github?" + params;
     console.log(chalk.blue("Opening GitHub login in your browser..."));
-    console.log(chalk.gray(`If it doesn't open, visit:\n${url}`));
+    console.log(chalk.gray("If it doesn't open, visit:\n" + url));
     openBrowser(url);
   });
 
   server.on("error", (err) => {
-    console.error(chalk.red(`Could not start local server: ${err.message}`));
+    console.error(chalk.red("Could not start local server: " + err.message));
     process.exit(1);
   });
 });
 
-// ─── LOGOUT ───────────────────────────────────────────────────────────────────
 program.command("logout").description("Log out").action(async () => {
   const creds = loadCredentials();
   if (!creds) { console.log("Not logged in."); return; }
   const spinner = ora("Logging out...").start();
-  try {
-    await makeClient(creds.access_token).post("/auth/logout", { refresh_token: creds.refresh_token });
-  } catch {}
+  try { await makeClient(creds.access_token).post("/auth/logout", { refresh_token: creds.refresh_token }); } catch {}
   clearCredentials();
   spinner.succeed("Logged out successfully.");
 });
 
-// ─── WHOAMI ───────────────────────────────────────────────────────────────────
 program.command("whoami").description("Show current user").action(async () => {
   const token   = await getToken();
   const spinner = ora("Fetching user info...").start();
@@ -141,7 +169,6 @@ program.command("whoami").description("Show current user").action(async () => {
   } catch (err) { spinner.fail(err.message); }
 });
 
-// ─── PROFILES ─────────────────────────────────────────────────────────────────
 const profiles = program.command("profiles").description("Manage profiles");
 
 profiles.command("list").description("List profiles")
@@ -158,20 +185,20 @@ profiles.command("list").description("List profiles")
     const token   = await getToken();
     const spinner = ora("Fetching profiles...").start();
     const params  = new URLSearchParams();
-    if (opts.gender)   params.set("gender",    opts.gender);
-    if (opts.country)  params.set("country_id", opts.country);
-    if (opts.ageGroup) params.set("age_group",  opts.ageGroup);
-    if (opts.minAge)   params.set("min_age",    opts.minAge);
-    if (opts.maxAge)   params.set("max_age",    opts.maxAge);
-    if (opts.sortBy)   params.set("sort_by",    opts.sortBy);
-    if (opts.order)    params.set("order",      opts.order);
-    if (opts.page)     params.set("page",       opts.page);
-    if (opts.limit)    params.set("limit",      opts.limit);
+    if (opts.gender)   params.set("gender",     opts.gender);
+    if (opts.country)  params.set("country_id",  opts.country);
+    if (opts.ageGroup) params.set("age_group",   opts.ageGroup);
+    if (opts.minAge)   params.set("min_age",     opts.minAge);
+    if (opts.maxAge)   params.set("max_age",     opts.maxAge);
+    if (opts.sortBy)   params.set("sort_by",     opts.sortBy);
+    if (opts.order)    params.set("order",       opts.order);
+    if (opts.page)     params.set("page",        opts.page);
+    if (opts.limit)    params.set("limit",       opts.limit);
     try {
-      const res = await makeClient(token).get(`/api/profiles?${params}`);
+      const res = await makeClient(token).get("/api/profiles?" + params);
       spinner.stop();
       const { data, total, page, total_pages } = res.data;
-      console.log(chalk.gray(`Page ${page} of ${total_pages} | Total: ${total}`));
+      console.log(chalk.gray("Page " + page + " of " + total_pages + " | Total: " + total));
       printTable(
         ["name", "gender", "age", "age_group", "country_id", "country_name"],
         data.map((p) => [p.name, p.gender, p.age, p.age_group, p.country_id, p.country_name || "—"])
@@ -183,7 +210,7 @@ profiles.command("get <id>").description("Get a profile by ID").action(async (id
   const token   = await getToken();
   const spinner = ora("Fetching profile...").start();
   try {
-    const res = await makeClient(token).get(`/api/profiles/${id}`);
+    const res = await makeClient(token).get("/api/profiles/" + id);
     spinner.stop();
     printProfile(res.data.data);
   } catch (err) { spinner.fail(err.message); }
@@ -199,10 +226,10 @@ profiles.command("search <query>").description("Natural language search")
     if (opts.page)  params.set("page",  opts.page);
     if (opts.limit) params.set("limit", opts.limit);
     try {
-      const res = await makeClient(token).get(`/api/profiles/search?${params}`);
+      const res = await makeClient(token).get("/api/profiles/search?" + params);
       spinner.stop();
       const { data, total, page, total_pages } = res.data;
-      console.log(chalk.gray(`Page ${page} of ${total_pages} | Total: ${total}`));
+      console.log(chalk.gray("Page " + page + " of " + total_pages + " | Total: " + total));
       printTable(
         ["name", "gender", "age", "age_group", "country_id", "country_name"],
         data.map((p) => [p.name, p.gender, p.age, p.age_group, p.country_id, p.country_name || "—"])
@@ -214,7 +241,7 @@ profiles.command("create").description("Create a profile (admin only)")
   .requiredOption("--name <name>")
   .action(async (opts) => {
     const token   = await getToken();
-    const spinner = ora(`Creating profile for "${opts.name}"...`).start();
+    const spinner = ora("Creating profile for \"" + opts.name + "\"...").start();
     try {
       const res = await makeClient(token).post("/api/profiles", { name: opts.name });
       spinner.succeed("Profile created.");
@@ -233,27 +260,25 @@ profiles.command("export").description("Export profiles as CSV")
     const token   = await getToken();
     const spinner = ora("Exporting profiles...").start();
     const params  = new URLSearchParams({ format: opts.format });
-    if (opts.gender)   params.set("gender",    opts.gender);
-    if (opts.country)  params.set("country_id", opts.country);
-    if (opts.ageGroup) params.set("age_group",  opts.ageGroup);
-    if (opts.sortBy)   params.set("sort_by",    opts.sortBy);
-    if (opts.order)    params.set("order",      opts.order);
+    if (opts.gender)   params.set("gender",     opts.gender);
+    if (opts.country)  params.set("country_id",  opts.country);
+    if (opts.ageGroup) params.set("age_group",   opts.ageGroup);
+    if (opts.sortBy)   params.set("sort_by",     opts.sortBy);
+    if (opts.order)    params.set("order",       opts.order);
     try {
-      const https = require("https");
-      const url   = new URL(`${BASE_URL}/api/profiles/export?${params}`);
-      const csv   = await new Promise((resolve, reject) => {
-        https.get(url.toString(), {
-          headers: { Authorization: `Bearer ${token}`, "X-API-Version": "1" },
-        }, (res) => {
+      const url = new URL(BASE_URL + "/api/profiles/export?" + params);
+      const lib = url.protocol === "https:" ? https : http;
+      const csv = await new Promise((resolve, reject) => {
+        lib.get(url.toString(), { headers: { Authorization: "Bearer " + token, "X-API-Version": "1" } }, (res) => {
           let data = "";
           res.on("data", (c) => (data += c));
           res.on("end", () => resolve(data));
         }).on("error", reject);
       });
-      const filename = `profiles_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+      const filename = "profiles_" + new Date().toISOString().replace(/[:.]/g, "-") + ".csv";
       const filepath = path.join(process.cwd(), filename);
       fs.writeFileSync(filepath, csv);
-      spinner.succeed(`Exported to ${filepath}`);
+      spinner.succeed("Exported to " + filepath);
     } catch (err) { spinner.fail(err.message); }
   });
 
